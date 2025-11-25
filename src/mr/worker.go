@@ -1,10 +1,16 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io"
+	"log"
+	"net/rpc"
+	"os"
+	"sort"
+	"time"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -32,7 +38,33 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// Your worker implementation here.
+	// Args := TaskRequestArgs{}
+	// Reply := TaskRequestReply{}
+	// Reply.TaskId = -2
+	// Reply.TaskStamp = -1
+	lastTaskId := -2
+	lastTaskStamp := TaskStamp(-1)
 
+	for {
+		Args := TaskRequestArgs{
+			TaskId: lastTaskId,
+			TaskStamp: lastTaskStamp, 
+		}
+		Reply := TaskRequestReply{}
+		CallTaskRequest(&Args, &Reply)
+		switch Reply.TaskType {
+		case MapTask:
+			DoMapTask(mapf, Reply.TaskId, Reply.Filename, Reply.NReduce)
+		case ReduceTask:
+			DoReduceTask(reducef, Reply.TaskId, Reply.NMap)
+		case Waiting:
+			time.Sleep(time.Second)
+		case Finish:
+			return
+		}
+		lastTaskId = Reply.TaskId
+		lastTaskStamp = Reply.TaskStamp
+	}
 	// uncomment to send the Example RPC to the coordinator.
 	// CallExample()
 
@@ -63,6 +95,90 @@ func CallExample() {
 		// reply.Y should be 100.
 		fmt.Printf("reply.Y %v\n", reply.Y)
 	} else {
+		fmt.Printf("call failed!\n")
+	}
+}
+
+func DoMapTask(mapf func(string, string) []KeyValue, taskId int, filename string, nReduce int) error {
+	file, err := os.Open(filename)
+	if err != nil {
+		return err
+	}
+	contentsRaw, err := io.ReadAll(file)
+	contents := string(contentsRaw)
+	mapResult := mapf(filename, contents)
+
+	intermediate := make([][]KeyValue, nReduce)
+	for _, kv := range mapResult {
+		iReduce := ihash(kv.Key) % nReduce
+		intermediate[iReduce] = append(intermediate[iReduce], kv)
+	}
+	for i := 0; i < nReduce; i++ {
+		sort.Slice(intermediate[i], func(j, k int) bool {
+			return intermediate[i][j].Key < intermediate[i][k].Key
+		})
+		iFilename := fmt.Sprintf("mr-%d-%d", taskId, i)
+		iFile, err := os.Create(iFilename)
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(iFile)
+		for _, kv := range intermediate[i] {
+			err := enc.Encode(&kv)
+			if err != nil {
+				return err
+			}
+		}
+		iFile.Close()
+	}
+	return nil
+}
+
+
+func DoReduceTask(reducef func(string, []string) string, taskId int, nMap int) error {
+	intermediate := make(map[string][]string, 0)
+	kv := KeyValue{}
+	
+	for i := 0; i < nMap; i++ {
+		iFilename := fmt.Sprintf("mr-%d-%d", i, taskId)
+		iFile, err := os.Open(iFilename)
+		if err != nil {
+			continue
+		}
+		dec := json.NewDecoder(iFile)
+		for {
+			if  err = dec.Decode(&kv); err == nil {
+				intermediate[kv.Key] = append(intermediate[kv.Key], kv.Value)
+			} else {
+				break
+			}
+		}
+		
+		iFile.Close()
+	}
+
+	oFile, err := os.Create(fmt.Sprintf("mr-out-%d", taskId))
+	if err != nil {
+		log.Fatalf("cannot create %v", err.Error())
+	}
+	for key, value := range intermediate {
+		_, err = oFile.WriteString(fmt.Sprintf("%v %v\n", key, reducef(key, value)))
+		if err != nil {
+			log.Fatalf("cannot write %v", err.Error())
+		}
+	}
+	oFile.Close()
+	return nil
+}
+
+func CallTaskRequest(Args *TaskRequestArgs, Reply *TaskRequestReply) {
+
+	// Args.TaskStamp = Reply.TaskStamp //此时这个值为-1
+	// Args.TaskId = Reply.TaskId	//此时这个值为-2
+	// fmt.Printf("Args: %+v\n", *Args);
+	ok := call("Coordinator.TaskRequest", Args, Reply)	//这个过程中，Coordinator进程中，Reply.TaskStamp会更新，Reply.TaskId会设置为0
+	// fmt.Printf("Reply: %+v\n", *Reply);	//Reply.TaskStamp正确更新，Reply.TaskId仍为-2
+	if !ok {
 		fmt.Printf("call failed!\n")
 	}
 }
