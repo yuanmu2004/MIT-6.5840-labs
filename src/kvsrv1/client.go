@@ -1,6 +1,8 @@
 package kvsrv
 
 import (
+	// "fmt"
+
 	"6.5840/kvsrv1/rpc"
 	"6.5840/kvtest1"
 	"6.5840/tester1"
@@ -30,6 +32,12 @@ func MakeClerk(clnt *tester.Clnt, server string) kvtest.IKVClerk {
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 	// You will have to modify this function.
+	args := rpc.GetArgs{Key: key}
+	var reply rpc.GetReply
+	ok := ck.clnt.Call(ck.server, "KVServer.Get", &args, &reply)
+	if ok && reply.Err != rpc.ErrNoKey {
+		return reply.Value, reply.Version, rpc.OK
+	}
 	return "", 0, rpc.ErrNoKey
 }
 
@@ -52,5 +60,12 @@ func (ck *Clerk) Get(key string) (string, rpc.Tversion, rpc.Err) {
 // arguments. Additionally, reply must be passed as a pointer.
 func (ck *Clerk) Put(key, value string, version rpc.Tversion) rpc.Err {
 	// You will have to modify this function.
-	return rpc.ErrNoKey
+	args := rpc.PutArgs{Key: key, Value: value, Version: version}
+	var reply rpc.PutReply
+	ok := ck.clnt.Call(ck.server, "KVServer.Put", &args, &reply)
+	// fmt.Printf("Clerk.Put: Args:%+v, Reply:%+v, Ok:%t\n", args, reply, ok)
+	if ok && reply.Err == rpc.OK {
+		return rpc.OK
+	}
+	return reply.Err
 }
