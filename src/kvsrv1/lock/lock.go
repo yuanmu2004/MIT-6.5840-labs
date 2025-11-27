@@ -2,6 +2,7 @@ package lock
 
 import (
 	// "6.5840/kvsrv1/rpc"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -27,15 +28,23 @@ type Lock struct {
 // Use l as the key to store the "lock state" (you would have to decide
 // precisely what the lock state is).
 func MakeLock(ck kvtest.IKVClerk, l string) *Lock {
-	lk := &Lock{ck: ck, l: l, id: "lock"}
+	lk := &Lock{ck: ck, l: l}
 	// You may add code here
+	lk.id = fmt.Sprintf("%s-%d-%d", l, rand.Int(), time.Now().Nanosecond())
 	return lk
 }
 
 func (lk *Lock) Acquire() {
 	// Your code here
+	validate := false
 	for {
 		value, version, err := lk.ck.Get(lk.l)
+		if validate && err == rpc.OK {
+			if value == lk.id {
+				return
+			}
+			validate = false
+		}
 		if err == rpc.ErrNoKey {
 			err = lk.ck.Put(lk.l, lk.id, 0)
 			if err == rpc.OK {
@@ -50,6 +59,9 @@ func (lk *Lock) Acquire() {
 				}
 			} 
 		}
+		if err == rpc.ErrMaybe {
+			validate = true
+		}
 		time.Sleep(time.Duration(rand.Intn(60) + 20) * time.Millisecond)
 	}
 	
@@ -57,8 +69,15 @@ func (lk *Lock) Acquire() {
 
 func (lk *Lock) Release() {
 	// Your code here
+	validate := false
 	for {
 		value, version, err := lk.ck.Get(lk.l)
+		if validate && err == rpc.OK {
+			if value != lk.id {
+				return
+			}
+			validate = false
+		}
 		if err == rpc.ErrNoKey {
 			return
 		} else {
@@ -68,6 +87,9 @@ func (lk *Lock) Release() {
 					return
 				}
 			}
+		}
+		if err == rpc.ErrMaybe {
+			validate = true
 		}
 		time.Sleep(time.Duration(rand.Intn(60) + 20) * time.Millisecond)
 	}
